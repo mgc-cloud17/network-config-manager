@@ -9,7 +9,12 @@ Verifica:
 """
 
 from crypto import decrypt_password
-from database import init_db, add_device, get_device_by_id, delete_device, get_connection
+from database import (
+    add_device,
+    delete_device,
+    get_device_by_id,
+    init_db,
+)
 
 
 def run_quick_test():

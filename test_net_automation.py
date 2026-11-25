@@ -8,7 +8,6 @@ Valida:
 Gobernado por RULES.md y SPEC-02-NET-AUTOMATION.
 """
 
-import socket
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -17,10 +16,10 @@ from paramiko.ssh_exception import SSHException
 
 from crypto import encrypt_password
 from net_automation import (
-    test_connection,
-    fetch_running_config,
     apply_configuration,
     calculate_diff,
+    fetch_running_config,
+    test_connection,
 )
 
 
@@ -73,7 +72,7 @@ class TestNetAutomation(unittest.TestCase):
         result = test_connection(self.device_encrypted)
         self.assertTrue(result)
         # Verificar que ConnectHandler recibió credenciales descifradas y compatibilidad IOSv
-        args, kwargs = mock_connect.call_args
+        _, kwargs = mock_connect.call_args
         self.assertEqual(kwargs["password"], "CiscoSecretPassword123!")
         self.assertEqual(kwargs["secret"], "CiscoEnableSecret123!")
         self.assertEqual(kwargs["disabled_algorithms"], {"pubkeys": ["rsa-sha2-256", "rsa-sha2-512"]})
@@ -118,7 +117,7 @@ class TestNetAutomation(unittest.TestCase):
     @patch("net_automation.ConnectHandler")
     def test_connection_socket_and_os_errors(self, mock_connect):
         """Caso 5: Errores de socket/OS capturados explícitamente retornan False."""
-        for error in [socket.error("Connection refused"), OSError(10061, "Host unreachable"), EOFError()]:
+        for error in [OSError("Connection refused"), OSError(10061, "Host unreachable"), EOFError()]:
             mock_connect.side_effect = error
             self.assertFalse(test_connection(self.device_plain))
 
@@ -189,7 +188,7 @@ class TestNetAutomation(unittest.TestCase):
     @patch("net_automation.ConnectHandler")
     def test_fetch_running_config_socket_error(self, mock_connect):
         """Caso 9: socket.error/OSError relanzado como ConnectionError estructurado."""
-        mock_connect.side_effect = socket.error("No route to host")
+        mock_connect.side_effect = OSError("No route to host")
 
         with self.assertRaises(ConnectionError):
             fetch_running_config(self.device_plain)
@@ -322,7 +321,7 @@ class TestNetAutomation(unittest.TestCase):
         self.assertNotIn("CiscoEnableSecret123!", str(auth_ctx.exception))
         self.assertNotIn("CiscoSecretPassword123!", str(auth_ctx.exception))
 
-        mock_connect.side_effect = socket.error("Socket closed")
+        mock_connect.side_effect = OSError("Socket closed")
         with self.assertRaises(ConnectionError):
             apply_configuration(self.device_plain, "hostname R1")
 

@@ -1,0 +1,29 @@
+# Secretos y estado local: nunca deben entrar en la imagen
+.env
+.env.*
+!.env.example
+*.key
+*.db
+*.sqlite
+*.sqlite3
+
+# Entornos virtuales y caché de Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.ruff_cache/
+
+# Control de versiones, CI y herramientas de desarrollo
+.git/
+.github/
+.gitignore
+.specify/
+.agents/
+specs/
+
+# Pruebas y documentación (no se necesitan en ejecución)
+test_*.py
+*.md
+Dockerfile
+.dockerignore

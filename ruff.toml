@@ -1,0 +1,4 @@
+# Configuración de ruff: se lintean solo los archivos Python del proyecto.
+# Se excluyen las herramientas de Spec Kit y los artefactos de especificación.
+target-version = "py312"
+extend-exclude = [".specify", ".agents", "specs", "venv"]

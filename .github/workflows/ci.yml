@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Instalar ruff (misma versión fijada en requirements.txt)
+        run: pip install ruff==0.17.6
+      - name: Análisis estático
+        run: ruff check .
+
+  test:
+    name: Pruebas (unittest)
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+      - name: Generar ENCRYPTION_KEY efímera
+        run: |
+          KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
+          echo "::add-mask::$KEY"
+          echo "ENCRYPTION_KEY=$KEY" >> "$GITHUB_ENV"
+      - name: Ejecutar suite completa
+        run: python -m unittest discover -s . -p "test_*.py" -v
+
+  docker-build:
+    name: Construcción de imagen Docker
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Construir imagen
+        run: docker build -t network-config-manager:ci .

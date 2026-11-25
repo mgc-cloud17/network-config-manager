@@ -6,8 +6,9 @@ Gobernado por RULES.md y SPEC-01-DB-INVENTORY.
 
 import os
 from pathlib import Path
+
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
-from cryptography.fernet import Fernet, InvalidToken
 
 # Cargar variables de entorno desde .env local
 ENV_PATH = Path(__file__).resolve().parent / ".env"

@@ -8,13 +8,13 @@ Gobernado por RULES.md, ARCHITECTURE.md y SPEC-02-NET-AUTOMATION.
 
 import difflib
 import socket
-from typing import Dict, Any, List, Optional, Union
+from typing import Any
 
 from netmiko import ConnectHandler
 from netmiko.exceptions import (
-    NetmikoTimeoutException,
     NetmikoAuthenticationException,
     NetmikoBaseException,
+    NetmikoTimeoutException,
 )
 from paramiko.ssh_exception import SSHException
 
@@ -33,7 +33,7 @@ GLOBAL_DELAY_FACTOR = 2.0     # Cadencia de lectura más holgada para QEMU/IOSv
 _TRANSPORT_ERRORS = (socket.error, OSError, EOFError, NetmikoBaseException, SSHException)
 
 
-def _resolve_credentials(device_dict: Dict[str, Any]) -> str:
+def _resolve_credentials(device_dict: dict[str, Any]) -> str:
     """
     Resuelve la contraseña en memoria volátil sin persistirla ni exponerla.
     Si el diccionario contiene 'encrypted_password', la descifra con Fernet.
@@ -42,41 +42,41 @@ def _resolve_credentials(device_dict: Dict[str, Any]) -> str:
     Raises:
         ValueError: Si no se encuentra ninguna credencial válida en el diccionario.
     """
-    if "encrypted_password" in device_dict and device_dict["encrypted_password"]:
+    if device_dict.get("encrypted_password"):
         return decrypt_password(device_dict["encrypted_password"])
 
-    if "password" in device_dict and device_dict["password"]:
+    if device_dict.get("password"):
         return str(device_dict["password"])
 
-    if "plain_password" in device_dict and device_dict["plain_password"]:
+    if device_dict.get("plain_password"):
         return str(device_dict["plain_password"])
 
     raise ValueError("No se proporcionó una credencial válida ('encrypted_password' o 'password').")
 
 
-def _resolve_secret(device_dict: Dict[str, Any]) -> str:
+def _resolve_secret(device_dict: dict[str, Any]) -> str:
     """
     Resuelve la contraseña de enable secret en memoria volátil.
     Si existe 'encrypted_secret', la descifra con Fernet.
     Si no existe ningún secret configurado, retorna cadena vacía ''.
     """
-    if "encrypted_secret" in device_dict and device_dict["encrypted_secret"]:
+    if device_dict.get("encrypted_secret"):
         return decrypt_password(device_dict["encrypted_secret"])
 
-    if "secret" in device_dict and device_dict["secret"]:
+    if device_dict.get("secret"):
         return str(device_dict["secret"])
 
-    if "plain_secret" in device_dict and device_dict["plain_secret"]:
+    if device_dict.get("plain_secret"):
         return str(device_dict["plain_secret"])
 
     return ""
 
 
 def _build_netmiko_params(
-    device_dict: Dict[str, Any],
+    device_dict: dict[str, Any],
     plain_password: str,
-    plain_secret: Optional[str] = None,
-) -> Dict[str, Any]:
+    plain_secret: str | None = None,
+) -> dict[str, Any]:
     """
     Construye el diccionario de parámetros con configuración defensiva estricta
     para routers Cisco IOS / IOSv 15.9(3)M6 (Dynamips/GNS3/Paramiko 5.1.0).
@@ -101,7 +101,7 @@ def _build_netmiko_params(
     }
 
 
-def test_connection(device_dict: Dict[str, Any]) -> bool:
+def test_connection(device_dict: dict[str, Any]) -> bool:
     """
     Verifica la conectividad SSH y validez de credenciales contra un dispositivo Cisco IOS.
 
@@ -111,8 +111,8 @@ def test_connection(device_dict: Dict[str, Any]) -> bool:
     Returns:
         bool: True si la conexión se establece y devuelve un prompt válido; False en caso contrario.
     """
-    plain_password: Optional[str] = None
-    plain_secret: Optional[str] = None
+    plain_password: str | None = None
+    plain_secret: str | None = None
     try:
         plain_password = _resolve_credentials(device_dict)
         plain_secret = _resolve_secret(device_dict)
@@ -141,7 +141,7 @@ def test_connection(device_dict: Dict[str, Any]) -> bool:
             del plain_secret
 
 
-def fetch_running_config(device_dict: Dict[str, Any]) -> str:
+def fetch_running_config(device_dict: dict[str, Any]) -> str:
     """
     Conecta vía SSH al dispositivo Cisco IOS, eleva privilegios con enable() si es necesario,
     ejecuta 'show running-config' con read_timeout=30 y retorna la configuración limpia.
@@ -158,8 +158,8 @@ def fetch_running_config(device_dict: Dict[str, Any]) -> str:
         ConnectionError: Si ocurre un fallo de socket o red subyacente.
         ValueError: Si la salida está vacía o contiene errores de sintaxis IOS.
     """
-    plain_password: Optional[str] = None
-    plain_secret: Optional[str] = None
+    plain_password: str | None = None
+    plain_secret: str | None = None
     host = device_dict.get("ip_address", "desconocido")
 
     try:
@@ -193,7 +193,7 @@ def fetch_running_config(device_dict: Dict[str, Any]) -> str:
                 raise ValueError(f"Error de comando Cisco IOS reportado por {host}: '{indicator}'")
 
         # Sanitizar encabezados volátiles típicos de Cisco IOS
-        cleaned_lines: List[str] = []
+        cleaned_lines: list[str] = []
         for line in raw_output.replace("\r\n", "\n").splitlines():
             stripped = line.strip()
             # Omitir cabeceras volátiles
@@ -230,9 +230,9 @@ def fetch_running_config(device_dict: Dict[str, Any]) -> str:
 
 
 def apply_configuration(
-    device_dict: Dict[str, Any],
-    config_text: Union[str, List[str]],
-) -> Dict[str, Any]:
+    device_dict: dict[str, Any],
+    config_text: str | list[str],
+) -> dict[str, Any]:
     """
     Aplica comandos de configuración (cambios o rollback) a un dispositivo Cisco IOS,
     elevando a modo privilegiado con enable(), enviando el set de configuración y
@@ -261,7 +261,7 @@ def apply_configuration(
     else:
         raise TypeError("config_text debe ser una cadena (str) o una lista de comandos (List[str]).")
 
-    config_lines: List[str] = []
+    config_lines: list[str] = []
     for line in raw_lines:
         stripped = line.strip()
         if not stripped:
@@ -279,8 +279,8 @@ def apply_configuration(
     if not config_lines:
         raise ValueError("No hay comandos de configuración válidos para aplicar.")
 
-    plain_password: Optional[str] = None
-    plain_secret: Optional[str] = None
+    plain_password: str | None = None
+    plain_secret: str | None = None
     host = device_dict.get("ip_address", "desconocido")
 
     try:
@@ -328,7 +328,7 @@ def calculate_diff(
     new_config: str,
     fromfile: str = "anterior",
     tofile: str = "actual",
-) -> List[str]:
+) -> list[str]:
     """
     Calcula las diferencias unificadas entre dos configuraciones usando difflib.unified_diff.
 

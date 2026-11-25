@@ -720,6 +720,13 @@
                         const tdId = document.createElement('td');
                         tdId.className = 'px-4 py-2.5 font-mono font-semibold text-sky-400';
                         tdId.textContent = `#${b.id}`;
+                        if (b.s3_key) {
+                            const s3Badge = document.createElement('span');
+                            s3Badge.className = 'ml-2 px-1.5 py-0.5 rounded text-[10px] font-sans font-medium bg-indigo-950/70 text-indigo-300 border border-indigo-800/60';
+                            s3Badge.textContent = 'S3';
+                            s3Badge.title = `Copia cifrada en S3: ${b.s3_key}`;
+                            tdId.appendChild(s3Badge);
+                        }
 
                         const tdTime = document.createElement('td');
                         tdTime.className = 'px-4 py-2.5 font-mono text-slate-300';
@@ -849,7 +856,8 @@
                 try {
                     const res = await apiFetch(`/api/devices/${dev.id}/backup`, { method: 'POST' });
                     state.sshStatusByDevice[dev.id] = { ok: true, label: 'SSH OK' };
-                    showToast(res.message, 'success');
+                    const cloudWarning = res.data && res.data.cloud_sync && !res.data.cloud_sync.synced && res.data.cloud_sync.error;
+                    showToast(res.message, cloudWarning ? 'warning' : 'success');
                     await loadDevices();
                     selectDevice(dev.id);
                     if (res.data && res.data.id) {

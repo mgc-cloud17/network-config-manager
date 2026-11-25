@@ -7,25 +7,28 @@ Gobernado por RULES.md y ARCHITECTURE.md.
 
 import ipaddress
 import sqlite3
+
 from flask import Flask, jsonify, render_template, request
 from netmiko.exceptions import NetmikoAuthenticationException, NetmikoTimeoutException
 
+from cloud_storage import upload_encrypted_backup
 from database import (
     DEFAULT_DB_PATH,
-    init_db,
-    add_device,
-    get_devices,
-    get_device_by_id,
-    delete_device,
     add_backup,
+    add_device,
+    delete_device,
     get_backup_by_id,
     get_device_backups,
+    get_device_by_id,
+    get_devices,
+    init_db,
+    update_backup_s3_metadata,
 )
 from net_automation import (
-    test_connection,
-    fetch_running_config,
     apply_configuration,
     calculate_diff,
+    fetch_running_config,
+    test_connection,
 )
 
 app = Flask(__name__)
@@ -185,11 +188,31 @@ def create_device_backup(device_id: int):
     try:
         raw_config = fetch_running_config(device)
         backup = add_backup(device_id, raw_config, db_path=db_path)
+
+        # Sincronización cloud opcional: el respaldo local ya está persistido y
+        # ninguna falla de S3 debe convertirse en un error de la API.
+        cloud_sync = upload_encrypted_backup(device["hostname"], backup["id"], raw_config)
+        if cloud_sync["synced"]:
+            try:
+                update_backup_s3_metadata(
+                    backup["id"], cloud_sync["s3_key"], cloud_sync["version_id"], db_path=db_path
+                )
+            except sqlite3.Error:
+                cloud_sync["error"] = (
+                    "La copia se subió a S3 pero no se pudieron registrar sus metadatos en SQLite."
+                )
+
+        message = f"Backup capturado exitosamente desde {device['hostname']}."
+        if cloud_sync["synced"]:
+            message += " Copia cifrada sincronizada en S3."
+        elif cloud_sync["error"]:
+            message += f" Advertencia: la sincronización con S3 falló ({cloud_sync['error']}); el respaldo local se conservó."
+
         return (
             jsonify(
                 {
                     "status": "success",
-                    "message": f"Backup capturado exitosamente desde {device['hostname']}.",
+                    "message": message,
                     "data": {
                         "id": backup["id"],
                         "backup_id": backup["id"],
@@ -199,6 +222,9 @@ def create_device_backup(device_id: int):
                         "size_bytes": len(backup["raw_config"].encode("utf-8")),
                         "config_text": backup["raw_config"],
                         "raw_config": backup["raw_config"],
+                        "s3_key": cloud_sync["s3_key"],
+                        "s3_version_id": cloud_sync["version_id"],
+                        "cloud_sync": cloud_sync,
                     },
                 }
             ),
@@ -243,6 +269,8 @@ def get_backup_detail(backup_id: int):
                     "size_bytes": len(backup["raw_config"].encode("utf-8")),
                     "config_text": backup["raw_config"],
                     "raw_config": backup["raw_config"],
+                    "s3_key": backup.get("s3_key"),
+                    "s3_version_id": backup.get("s3_version_id"),
                 },
             }
         ),

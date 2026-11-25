@@ -7,21 +7,29 @@ import os
 import sqlite3
 import tempfile
 import unittest
-from pathlib import Path
-from cryptography.fernet import Fernet, InvalidToken
+
+from cryptography.fernet import InvalidToken
 
 # Importar módulos a testear
-from crypto import encrypt_password, decrypt_password, get_fernet
-from database import init_db, add_device, get_devices, get_device_by_id, delete_device, get_connection
+from crypto import decrypt_password, encrypt_password
+from database import (
+    add_device,
+    delete_device,
+    get_backup_by_id,
+    get_connection,
+    get_device_by_id,
+    get_devices,
+    init_db,
+    update_backup_s3_metadata,
+)
 
 
 class TestDatabaseAndCrypto(unittest.TestCase):
 
     def setUp(self):
         # Crear base de datos temporal aislada para cada test
-        self.temp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self.temp_db.close()
-        self.db_path = self.temp_db.name
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            self.db_path = tmp.name
         init_db(self.db_path)
 
     def tearDown(self):
@@ -226,8 +234,8 @@ class TestDatabaseAndCrypto(unittest.TestCase):
         self.assertIsNone(rec["encrypted_secret"])
 
         # B. Migración desde tabla legacy sin columna encrypted_secret
-        legacy_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        legacy_db.close()
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as legacy_db:
+            pass
         try:
             conn = sqlite3.connect(legacy_db.name)
             try:
@@ -266,6 +274,74 @@ class TestDatabaseAndCrypto(unittest.TestCase):
             )
             migrated_rec = get_device_by_id(migrated_dev["id"], include_encrypted_password=True, db_path=legacy_db.name)
             self.assertEqual(decrypt_password(migrated_rec["encrypted_secret"]), "Secret123!")
+        finally:
+            if os.path.exists(legacy_db.name):
+                try:
+                    os.remove(legacy_db.name)
+                except OSError:
+                    pass
+
+    def test_case_9_s3_columns_migration_and_metadata_update(self):
+        """Caso 9: Migración idempotente de backups (s3_key, s3_version_id) y update_backup_s3_metadata()."""
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as legacy_db:
+            pass
+        try:
+            conn = sqlite3.connect(legacy_db.name)
+            try:
+                conn.execute("""
+                    CREATE TABLE devices (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        hostname TEXT NOT NULL,
+                        ip_address TEXT NOT NULL UNIQUE,
+                        device_type TEXT NOT NULL DEFAULT 'cisco_ios',
+                        username TEXT NOT NULL,
+                        encrypted_password TEXT NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    );
+                """)
+                conn.execute("""
+                    CREATE TABLE backups (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        device_id INTEGER NOT NULL,
+                        raw_config TEXT NOT NULL,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
+                    );
+                """)
+                conn.execute(
+                    "INSERT INTO devices (hostname, ip_address, username, encrypted_password) VALUES (?, ?, ?, ?)",
+                    ("R-Legacy", "10.0.0.1", "admin", "token"),
+                )
+                conn.execute("INSERT INTO backups (device_id, raw_config) VALUES (?, ?)", (1, "hostname R-Legacy"))
+                conn.commit()
+            finally:
+                conn.close()
+
+            # La migración es idempotente: se puede ejecutar varias veces sin error
+            init_db(legacy_db.name)
+            init_db(legacy_db.name)
+
+            conn = get_connection(legacy_db.name)
+            try:
+                cols = {row["name"] for row in conn.execute("PRAGMA table_info(backups);").fetchall()}
+            finally:
+                conn.close()
+            self.assertTrue({"s3_key", "s3_version_id"} <= cols)
+
+            # El respaldo previo se conserva intacto y sin metadatos S3
+            legacy_backup = get_backup_by_id(1, db_path=legacy_db.name)
+            self.assertEqual(legacy_backup["raw_config"], "hostname R-Legacy")
+            self.assertIsNone(legacy_backup["s3_key"])
+            self.assertIsNone(legacy_backup["s3_version_id"])
+
+            # Actualización con y sin VersionId; id inexistente retorna False
+            key = "backups/R-Legacy/20261125T201000Z_backup_1.enc"
+            self.assertTrue(update_backup_s3_metadata(1, key, "ver-9", db_path=legacy_db.name))
+            stored = get_backup_by_id(1, db_path=legacy_db.name)
+            self.assertEqual((stored["s3_key"], stored["s3_version_id"]), (key, "ver-9"))
+            self.assertTrue(update_backup_s3_metadata(1, key, None, db_path=legacy_db.name))
+            self.assertIsNone(get_backup_by_id(1, db_path=legacy_db.name)["s3_version_id"])
+            self.assertFalse(update_backup_s3_metadata(999, key, "x", db_path=legacy_db.name))
         finally:
             if os.path.exists(legacy_db.name):
                 try:
