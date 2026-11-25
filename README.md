@@ -2,14 +2,14 @@
 
 # 🛰️ Network Config Manager
 
-**Gestión automatizada de configuraciones para equipos Cisco IOS / IOSv: respaldos por SSHv2, auditoría con *diff* y *rollback* controlado, con credenciales cifradas en reposo.**
+**Automated configuration management for Cisco IOS / IOSv devices: SSHv2 backups, diff auditing, controlled rollback, and encrypted-at-rest credentials with optional AWS S3 hybrid replication.**
 
 ![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-3.1-000000?logo=flask&logoColor=white)
 ![Netmiko](https://img.shields.io/badge/Netmiko-4.8-1BA0D7)
 ![Paramiko](https://img.shields.io/badge/Paramiko-3.5.1-4B8BBE)
-![SQLite](https://img.shields.io/badge/SQLite-persistencia-003B57?logo=sqlite&logoColor=white)
-![Fernet](https://img.shields.io/badge/Cifrado-Fernet%20(AES--128)-2E7D32)
+![SQLite](https://img.shields.io/badge/SQLite-persistence-003B57?logo=sqlite&logoColor=white)
+![Fernet](https://img.shields.io/badge/Encryption-Fernet%20(AES--128)-2E7D32)
 ![AWS S3](https://img.shields.io/badge/AWS_S3-boto3%20%7C%20IAM_Roles-FF9900?logo=amazons3&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-non--root%20appuser-2496ED?logo=docker&logoColor=white)
 ![GitHub Actions](https://img.shields.io/badge/GitHub_Actions-CI%20(ruff%20%7C%20unittest%20%7C%20docker)-2088FF?logo=githubactions&logoColor=white)
@@ -21,26 +21,26 @@
 
 ---
 
-## 1. Descripción ejecutiva
+## 1. Executive Summary
 
-**Network Config Manager** es una aplicación web de NetDevOps/SRE para administrar el ciclo de vida de las configuraciones de routers y switches **Cisco IOS / IOSv**, preparada para despliegue en contenedores endurecidos e integración continua. Desde una única interfaz permite:
+**Network Config Manager** is a NetDevOps / SRE web application built to manage the configuration lifecycle of **Cisco IOS / IOSv** routers and switches, engineered for hardened container deployment and automated CI validation. From a single web console, operators can:
 
-- **Inventariar** dispositivos, guardando su contraseña SSH y su *enable secret* **cifrados con Fernet** (nunca en texto plano).
-- **Respaldar de forma híbrida (Local + AWS S3):** extrae el `running-config` en vivo por **SSHv2** (Netmiko/Paramiko), persiste primero en SQLite local y, si `ENABLE_S3_BACKUP=true`, sincroniza una copia **doblemente cifrada** (Fernet AES-128 + SSE-S3 AES256) hacia un bucket privado de **AWS S3** usando exclusivamente **IAM Roles** (con degradación elegante si S3 no está disponible).
-- **Auditar cambios** comparando dos versiones con un *diff* unificado (`difflib`) calculado en el backend y resaltado en el navegador.
-- **Restaurar (rollback)** una configuración anterior sobre el equipo real, con confirmación explícita y guardado en NVRAM (`write memory`).
-- **Desplegar y validar automáticamente:** imagen **Docker endurecida** (`python:3.12-slim`, usuario no-root `appuser`, Gunicorn `--preload`) y pipeline **GitHub Actions CI** (`ruff` $\rightarrow$ `unittest` $\rightarrow$ `docker build`).
+- **Manage Device Inventory:** Register network devices while storing SSH passwords and *enable secrets* **encrypted at rest with Fernet** (never in plaintext).
+- **Execute Hybrid Backups (Local SQLite + AWS S3):** Capture the live `running-config` over **SSHv2** (Netmiko/Paramiko), persist locally in SQLite first, and—when `ENABLE_S3_BACKUP=true`—automatically replicate a **double-encrypted** copy (client-side Fernet AES-128 + server-side SSE-S3 `AES256`) to a private **AWS S3** bucket using **IAM Roles** only (with graceful degradation if S3 is unavailable).
+- **Audit Configuration Drift:** Compare any two backup versions with a backend-computed unified diff (`difflib`) rendered with line-by-line color highlighting in the browser.
+- **Perform Controlled Rollbacks:** Push a previous configuration snapshot back to the live router with explicit modal confirmation and NVRAM persistence (`write memory`).
+- **Deploy & Validate Reliably:** Packaged in a **hardened Docker container** (`python:3.12-slim`, non-root `appuser`, Gunicorn `--preload`) and validated on every push/PR via **GitHub Actions CI** (`ruff` $\rightarrow$ `unittest` $\rightarrow$ `docker build`).
 
-El proyecto se diseñó bajo una gobernanza explícita ([`RULES.md`](RULES.md) y [`ARCHITECTURE.md`](ARCHITECTURE.md)): frontend *zero-build*, consultas SQL parametrizadas, secretos fuera del repositorio y manejo explícito de errores de red.
+The project adheres to strict architectural governance ([`RULES.md`](RULES.md) and [`ARCHITECTURE.md`](ARCHITECTURE.md)): zero-build frontend, parameterized SQL queries, zero hardcoded secrets, and explicit network error handling.
 
 ---
 
-## 2. Arquitectura y características clave
+## 2. Architecture & Key Features
 
 ```mermaid
 flowchart LR
-    subgraph Host["Host / Contenedor Docker (appuser non-root)"]
-        UI["Navegador<br/>HTML5 + Tailwind CDN + fetch"]
+    subgraph Host["Host / Docker Container (appuser non-root)"]
+        UI["Browser<br/>HTML5 + Tailwind CDN + fetch"]
         API["Flask + Gunicorn (:5000)<br/>app.py"]
         NET["net_automation.py<br/>Netmiko + Paramiko + difflib"]
         CLOUD["cloud_storage.py<br/>boto3 (IAM Role)"]
@@ -58,77 +58,76 @@ flowchart LR
         ENV -.-> CLOUD
     end
     NET <-->|"SSHv2 / TCP 22"| R1["Cisco IOSv 15.9(3)M6"]
-    CLOUD -->|"HTTPS PutObject<br/>Fernet + SSE-AES256"| S3[("AWS S3 Privado<br/>Versionado")]
+    CLOUD -->|"HTTPS PutObject<br/>Fernet + SSE-AES256"| S3[("Private AWS S3<br/>Versioned Bucket")]
 ```
 
-### 🔐 Cifrado de credenciales en reposo
-- `encrypted_password` y `encrypted_secret` se almacenan como tokens **Fernet** (AES-128-CBC + HMAC-SHA256) mediante [`crypto.py`](crypto.py).
-- La clave maestra `ENCRYPTION_KEY` vive **solo** en `.env` (excluido por `.gitignore`); el repositorio incluye únicamente [`.env.example`](.env.example).
-- Las contraseñas se descifran **en memoria** justo antes de abrir la sesión SSH y se descartan al terminar (`finally`).
-- La API **nunca** devuelve contraseñas ni *secrets*, ni en claro ni cifrados.
-- `enable secret` es **opcional** por dispositivo.
+### 🔐 Credential Encryption at Rest
+- `encrypted_password` and `encrypted_secret` are stored as **Fernet** tokens (AES-128-CBC + HMAC-SHA256) via [`crypto.py`](crypto.py).
+- The master key `ENCRYPTION_KEY` resides **only** in `.env` or runtime environment variables (excluded via `.gitignore`); the repository only ships [`.env.example`](.env.example).
+- Passwords are decrypted **in volatile memory** immediately before opening an SSH session and explicitly cleared in `finally`.
+- The REST API **never** exposes passwords or secrets—neither plaintext nor encrypted.
+- `enable secret` is **optional** per device.
 
-### ⚙️ Motor de automatización SSHv2 (`net_automation.py`)
-- Conexión con `ConnectHandler` (`device_type="cisco_ios"` por defecto), `fast_cli=False`, y `clear_buffer()` antes de operar.
-- **Timeouts calibrados para IOSv real (QEMU):** `timeout`, `conn_timeout`, `auth_timeout` y `banner_timeout` = 30 s, `read_timeout_override` = 30 s, `global_delay_factor` = 2.0; `show running-config` con `read_timeout=30` y `send_config_set` con `read_timeout=60`.
-- **Privilegios:** `enable()` solo se invoca si `not conn.check_enable_mode()`; con usuarios `privilege 15` (prompt `#`) no se pide contraseña de enable.
-- **Compatibilidad con Cisco IOSv 15.9(3)M6:** este IOS solo ofrece algoritmos SHA-1 (`diffie-hellman-group14-sha1`, host key `ssh-rsa`). Las versiones recientes de Paramiko los eliminaron (verificado con 5.1.0: *"no acceptable kex algorithm"*), por lo que el proyecto fija **Paramiko 3.5.1**, que los conserva. Además se pasa `disabled_algorithms={"pubkeys": ["rsa-sha2-256", "rsa-sha2-512"]}`.
-- **Funciones públicas:** `test_connection()`, `fetch_running_config()` (limpia las cabeceras volátiles `Building configuration...` y `Current configuration : ... bytes`), `apply_configuration()` (envía líneas con `send_config_set()` y guarda con `save_config()`) y `calculate_diff()`.
-- **Errores explícitos:** `NetmikoAuthenticationException`, `NetmikoTimeoutException` (conservando el detalle original) y errores de transporte (`socket.error`, `OSError`, `EOFError`, `NetmikoBaseException` y `SSHException` de Paramiko) → `ConnectionError`. Ningún mensaje incluye credenciales.
+### ⚙️ SSHv2 Network Automation Engine (`net_automation.py`)
+- Connects via `ConnectHandler` (`device_type="cisco_ios"` by default), `fast_cli=False`, and `clear_buffer()` before running commands.
+- **Tuned Timeouts for Real IOSv (QEMU):** `timeout`, `conn_timeout`, `auth_timeout`, and `banner_timeout` set to 30 s, `read_timeout_override` = 30 s, `global_delay_factor` = 2.0; `show running-config` uses `read_timeout=30` and `send_config_set` uses `read_timeout=60`.
+- **Privilege Elevation:** `enable()` is only invoked when `not conn.check_enable_mode()`; `privilege 15` users (landing directly on `#`) never hang waiting for an enable prompt.
+- **Cisco IOSv 15.9(3)M6 SSH Compatibility:** This IOS image only offers legacy SHA-1 algorithms (`diffie-hellman-group14-sha1`, `ssh-rsa` host key). Newer Paramiko releases removed SHA-1 KEX/host keys (verified with 5.1.0 failing with *"no acceptable kex algorithm"*), so this project pins **Paramiko 3.5.1** and sets `disabled_algorithms={"pubkeys": ["rsa-sha2-256", "rsa-sha2-512"]}`.
+- **Public Functions:** `test_connection()`, `fetch_running_config()` (strips volatile `Building configuration...` and `Current configuration : ... bytes` headers), `apply_configuration()` (`send_config_set()` + `save_config()`), and `calculate_diff()`.
+- **Explicit Error Handling:** Catches `NetmikoAuthenticationException`, `NetmikoTimeoutException` (preserving original Netmiko details), and transport failures (`socket.error`, `OSError`, `EOFError`, `NetmikoBaseException`, and Paramiko `SSHException`) $\rightarrow$ `ConnectionError`. No credentials ever leak into logs or error payloads.
 
-### 🔍 Comparador de versiones y rollback
-- `difflib.unified_diff(..., lineterm="")` en el backend, con normalización de saltos de línea (`\r\n` → `\n`).
-- El navegador resalta adiciones (`+`, verde), supresiones (`-`, rojo), bloques (`@@`, azul) y muestra contadores de cambios.
-- El *rollback* (desde la tabla de historial, el visor o el comparador) exige confirmar en un `<dialog>` modal nativo y reporta el resultado con notificaciones (*toasts*) y la salida CLI del equipo.
+### 🗄️ Persistence & Hybrid AWS S3 Backup (`cloud_storage.py`)
+- **Local-First SQLite:** Pure `sqlite3` with `PRAGMA foreign_keys = ON`, **parameterized queries (`?`)**, and idempotent schema migrations (`encrypted_secret`, `port` in `devices`; `s3_key`, `s3_version_id` in `backups`). Supports configurable `DB_PATH`.
+- **Double Encryption to AWS S3:** When `ENABLE_S3_BACKUP=true`, [`cloud_storage.py`](cloud_storage.py) encrypts `raw_config` in memory with **Fernet (AES-128)** prior to upload (`crypto.encrypt_password()`) and uploads with **SSE-S3 (`ServerSideEncryption="AES256"`)** to `backups/{hostname}/{timestamp}_backup_{backup_id}.enc`, recording `s3_key` and `VersionId` in SQLite.
+- **Zero Hardcoded Credentials (IAM Roles):** `boto3.client("s3", region_name=...)` relies exclusively on the standard AWS credential chain (IAM Instance Profile, ECS Task Role, IRSA, or standard AWS environment); `aws_access_key_id` and `aws_secret_access_key` never appear in code.
+- **Graceful Degradation:** If `ENABLE_S3_BACKUP=false` (default), `AWS_S3_BUCKET` is unset, or AWS raises `ClientError`, `NoCredentialsError`, or `BotoCoreError`, the local SQLite backup remains intact and the API returns `201 Created` with a `cloud_sync` status object instead of an HTTP `500`.
 
-### 🎨 Frontend *zero-build*
-- HTML5 semántico (`header`, `main`, `section`, `article`, `nav`, `dialog`, `table`, `form`), **Tailwind CSS vía CDN** y JavaScript nativo con **Fetch API**.
-- Sin Node.js, npm, bundlers ni frameworks. El DOM se construye con `textContent`/`createElement` (sin inyectar HTML de datos remotos).
-- Funciones: alta de dispositivos, prueba SSH, respaldo inmediato, visor monoespaciado del `running-config`, **copiar** al portapapeles y **descargar `.cfg`**.
+### 🔍 Diff Comparator & Rollback
+- Backend `difflib.unified_diff(..., lineterm="")` with `\r\n` $\rightarrow$ `\n` normalization.
+- The UI highlights additions (`+`, green), deletions (`-`, red), hunk headers (`@@`, blue), and displays change counters.
+- Rollback actions require confirmation in a native `<dialog>` modal and display CLI execution output alongside toast notifications.
 
-### 🗄️ Persistencia y Respaldo Híbrido en AWS S3 (`cloud_storage.py`)
-- **SQLite Local Primero:** `sqlite3` con `PRAGMA foreign_keys = ON`, **consultas parametrizadas (`?`)** y migración idempotente de columnas (`encrypted_secret`, `port` en `devices`; `s3_key`, `s3_version_id` en `backups`). Soporta ruta configurable mediante `DB_PATH`.
-- **Doble Cifrado hacia AWS S3:** Cuando `ENABLE_S3_BACKUP=true`, [`cloud_storage.py`](cloud_storage.py) cifra el `running-config` en memoria con **Fernet (AES-128)** antes de salir del proceso (`crypto.encrypt_password()`) y lo sube con **SSE-S3 (`ServerSideEncryption="AES256"`)** a `backups/{hostname}/{timestamp}_backup_{backup_id}.enc`, registrando `s3_key` y `VersionId` en SQLite.
-- **Cero Credenciales Hardcodeadas (IAM Roles):** El cliente `boto3.client("s3", region_name=...)` delega la autenticación exclusivamente a la cadena estándar de credenciales de AWS (IAM Instance Profile / ECS Task Role / entorno AWS); nunca recibe ni almacena `aws_access_key_id` o `aws_secret_access_key`.
-- **Degradación Elegante (*Graceful Degradation*):** Si `ENABLE_S3_BACKUP=false` (por defecto), falta `AWS_S3_BUCKET`, u ocurre un `ClientError`, `NoCredentialsError` o fallo de red (`BotoCoreError`), el respaldo local en SQLite se conserva intacto y la API responde `201 Created` reportando el estado en `cloud_sync` sin devolver error `500`.
+### 🎨 Zero-Build Frontend
+- Semantic HTML5 (`header`, `main`, `section`, `article`, `nav`, `dialog`, `table`, `form`), **Tailwind CSS via CDN**, and vanilla JavaScript with **Fetch API**—no Node.js, npm, bundlers, or UI frameworks.
+- DOM updates use `textContent`/`createElement` to prevent XSS. Includes S3 sync badges, monospace config viewer, clipboard copy, and `.cfg` file download.
 
-### 🐳 Contenedor Endurecido y Pipeline CI
-- **Docker (`Dockerfile` + `.dockerignore`):** Basado en `python:3.12-slim`, ejecuta **Gunicorn** (`--preload -w 2 -b 0.0.0.0:5000 app:app`) bajo el usuario sin privilegios `appuser` (non-root) con directorio `/app/data` escribible para SQLite y exclusión estricta de `.env`, `*.db` y `venv/`.
-- **GitHub Actions (`.github/workflows/ci.yml`):** En cada `push` o `pull_request` hacia `main`, valida tres etapas encadenadas: `lint` (`ruff check .`) $\rightarrow$ `test` (`unittest` con `ENCRYPTION_KEY` efímera) $\rightarrow$ `docker-build` (`docker build`).
+### 🐳 Hardened Container & CI Pipeline
+- **Docker (`Dockerfile` + `.dockerignore`):** Built on `python:3.12-slim`, runs **Gunicorn** (`--preload -w 2 -b 0.0.0.0:5000 app:app`) as non-root `appuser` with a writable `/app/data` directory for SQLite, excluding `.env`, `*.db`, and `venv/`.
+- **GitHub Actions (`.github/workflows/ci.yml`):** On every `push` or `pull_request` to `main`, runs three chained jobs: `lint` (`ruff check .`) $\rightarrow$ `test` (`unittest` with an ephemeral `ENCRYPTION_KEY`) $\rightarrow$ `docker-build` (`docker build`).
 
 ---
 
-## 3. Stack tecnológico
+## 3. Tech Stack
 
-| Capa | Tecnología | Versión validada |
+| Layer | Technology | Validated Version |
 | :--- | :--- | :--- |
-| Lenguaje | Python | 3.12.10 (`python:3.12-slim`) |
-| Servidor web / WSGI | Flask / Gunicorn (Werkzeug / Jinja2) | 3.1.3 / 27.0.1 |
-| Automatización de red | Netmiko | 4.8.0 |
-| Transporte SSH | Paramiko | **3.5.1** (fijada por compatibilidad con IOSv) |
-| Cifrado | `cryptography` (Fernet) | 50.0.2 |
-| Almacenamiento Cloud | AWS S3 (`boto3`, IAM Roles, SSE-AES256) | 1.44.11 |
-| Variables de entorno | python-dotenv | 1.2.4 |
-| Persistencia | SQLite (`sqlite3` de la biblioteca estándar) | — |
-| Comparación | `difflib` (biblioteca estándar) | — |
-| Frontend | HTML5 + Tailwind CSS (CDN) + JavaScript nativo | — |
+| Language | Python | 3.12.10 (`python:3.12-slim`) |
+| Web Server / WSGI | Flask / Gunicorn (Werkzeug / Jinja2) | 3.1.3 / 27.0.1 |
+| Network Automation | Netmiko | 4.8.0 |
+| SSH Transport | Paramiko | **3.5.1** (pinned for Cisco IOSv compatibility) |
+| Cryptography | `cryptography` (Fernet) | 50.0.2 |
+| Cloud Storage | AWS S3 (`boto3`, IAM Roles, SSE-AES256) | 1.44.11 |
+| Environment Config | python-dotenv | 1.2.4 |
+| Persistence | SQLite (`sqlite3` standard library) | — |
+| Diff Engine | `difflib` (standard library) | — |
+| Frontend | HTML5 + Tailwind CSS (CDN) + Vanilla JS | — |
 | Linting / CI | Ruff + GitHub Actions | 0.17.6 |
-| Contenerización | Docker (non-root `appuser`) | — |
-| Pruebas | `unittest` + `unittest.mock` | — |
+| Containerization | Docker (non-root `appuser`) | — |
+| Testing | `unittest` + `unittest.mock` | — |
 
-### Entorno de laboratorio validado
-- **GNS3** (cliente en Windows) + **GNS3 VM** sobre **VMware Workstation**.
-- **Cisco IOSv 15.9(3)M6** accesible en `192.168.76.10`, SSHv2 en el puerto 22, usuario con `privilege 15`.
+### Validated Lab Environment
+- **GNS3** (Windows client) + **GNS3 VM** on **VMware Workstation**.
+- **Cisco IOSv 15.9(3)M6** reachable at `192.168.76.10`, SSHv2 on port 22, `privilege 15` local user.
 
 <details>
-<summary>Preparación de referencia del router (IOS)</summary>
+<summary>Reference Router Preparation (Cisco IOS)</summary>
 
 ```
 hostname R1
 ip domain-name lab.local
 crypto key generate rsa modulus 2048
 ip ssh version 2
-username admin privilege 15 secret <contraseña>
+username admin privilege 15 secret <password>
 enable secret <secret>
 line vty 0 4
  login local
@@ -138,98 +137,98 @@ line vty 0 4
 
 ---
 
-## 4. Estructura del repositorio
+## 4. Repository Structure
 
 ```text
 network-config-manager/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml            # Pipeline CI: lint (ruff) -> test (unittest) -> docker-build
-├── app.py                    # Servidor Flask y API REST (puerto 5000)
-├── cloud_storage.py          # Respaldo híbrido AWS S3 (Fernet + SSE-AES256, IAM Role)
-├── database.py               # Capa de acceso a datos SQLite (DAL, migraciones, consultas ?)
+│       └── ci.yml            # CI pipeline: lint (ruff) -> test (unittest) -> docker-build
+├── app.py                    # Flask server & REST API (port 5000)
+├── cloud_storage.py          # Hybrid AWS S3 backup (Fernet + SSE-AES256, IAM Role)
+├── database.py               # SQLite DAL (parameterized queries, idempotent migrations)
 ├── net_automation.py         # Netmiko/Paramiko: test, backup, apply_configuration, difflib
-├── crypto.py                 # Cifrado/descifrado Fernet (lee ENCRYPTION_KEY de .env)
+├── crypto.py                 # Fernet encrypt/decrypt (reads ENCRYPTION_KEY from .env)
 ├── templates/
-│   └── index.html            # Interfaz web (HTML5 + Tailwind CDN + JS nativo + insignia S3)
+│   └── index.html            # Web UI (HTML5 + Tailwind CDN + Vanilla JS + S3 badge)
 ├── docs/
-│   └── images/               # Capturas de pantalla de la demostración end-to-end (5 PNG)
-├── test_api.py               # Pruebas de integración de la API Flask (9)
-├── test_cloud_storage.py     # Pruebas con mocks de AWS S3 y degradación elegante (11)
-├── test_db_crypto.py         # Pruebas de persistencia, cifrado y migraciones (9)
-├── test_net_automation.py    # Pruebas con mocks del motor de red y del diff (17)
-├── test_db.py                # Script de verificación rápida de SQLite + Fernet
-├── Dockerfile                # Imagen endurecida python:3.12-slim + appuser + Gunicorn
-├── .dockerignore             # Excluye .env, *.db, venv/, __pycache__/ y .git/
-├── requirements.txt          # Dependencias fijadas (incluye paramiko==3.5.1, boto3, gunicorn, ruff)
-├── ruff.toml                 # Configuración de análisis estático Ruff (py312)
-├── ARCHITECTURE.md           # Topología, modelo de datos, contratos y flujo
-├── RULES.md                  # Reglas de gobernanza técnica
-├── .env.example              # Plantilla de variables de entorno (Fernet + AWS S3)
-├── .gitignore                # Excluye .env, *.db, venv/ y __pycache__/
-├── .specify/                 # Especificaciones y plantillas Spec Kit
+│   └── images/               # End-to-end demonstration screenshots (5 PNGs)
+├── test_api.py               # Flask API integration tests (9)
+├── test_cloud_storage.py     # AWS S3 mocked unit tests & graceful degradation (11)
+├── test_db_crypto.py         # Persistence, encryption & migration tests (9)
+├── test_net_automation.py    # Mocked network automation & diff tests (17)
+├── test_db.py                # Quick SQLite + Fernet verification script
+├── Dockerfile                # Hardened python:3.12-slim + appuser + Gunicorn --preload
+├── .dockerignore             # Excludes .env, *.db, venv/, __pycache__/, and .git/
+├── requirements.txt          # Pinned dependencies (paramiko==3.5.1, boto3, gunicorn, ruff)
+├── ruff.toml                 # Ruff static analysis config (py312)
+├── ARCHITECTURE.md           # Topology, data model, contracts, and execution flow
+├── RULES.md                  # Technical governance rules
+├── .env.example              # Environment variable template (Fernet + AWS S3)
+├── .gitignore                # Excludes .env, *.db, venv/, and __pycache__/
+├── .specify/                 # Spec Kit templates and core specs
 │   └── specs/
 │       ├── 01-database-and-inventory.md
 │       └── 02-network-automation.md
-├── specs/                    # Especificación, plan y tareas de Evolución SRE/Cloud
+├── specs/                    # SRE/Cloud evolution spec, plan, and tasks
 │   └── 001-sre-cloud-evolution/
 │       ├── spec.md
 │       ├── plan.md
 │       └── tasks.md
-└── .agents/skills/           # Skills de Spec Kit para asistentes de IA
+└── .agents/skills/           # Spec Kit AI assistant skills
 ```
 
-Archivos generados localmente y **no versionados**: `.env`, `network_manager.db` y `venv/`.
+Locally generated and **untracked** files: `.env`, `network_manager.db`, and `venv/`.
 
 ---
 
-## 5. Instalación y ejecución local
+## 5. Local Installation & Execution
 
-> Requisitos: **Python 3.12** y **Git**.
+> Prerequisites: **Python 3.12** and **Git**.
 
 ### Windows (PowerShell)
 
 ```powershell
-# 1. Clonar y entrar al proyecto
+# 1. Clone and enter the repository
 git clone https://github.com/mgc-cloud17/network-config-manager.git
 cd network-config-manager
 
-# 2. Entorno virtual (si PowerShell bloquea el script: Set-ExecutionPolicy -Scope Process Bypass)
+# 2. Virtual environment (if PowerShell blocks activation: Set-ExecutionPolicy -Scope Process Bypass)
 python -m venv venv
 .\venv\Scripts\Activate.ps1
 
-# 3. Dependencias
+# 3. Install pinned dependencies
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-# 4. Clave Fernet en .env (a partir de .env.example)
+# 4. Generate Fernet ENCRYPTION_KEY into .env from .env.example
 Copy-Item .env.example .env
 $key = python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 (Get-Content .env) -replace 'genera_tu_propia_llave_fernet_aqui', $key | Set-Content .env -Encoding ascii
 
-# 5. Pruebas
+# 5. Run tests
 python -m unittest discover -s . -p "test_*.py" -v
 
-# 6. Servidor
+# 6. Start Flask server
 python app.py
 ```
 
 ### Linux / macOS (bash/zsh)
 
 ```bash
-# 1. Clonar y entrar al proyecto
+# 1. Clone and enter the repository
 git clone https://github.com/mgc-cloud17/network-config-manager.git
 cd network-config-manager
 
-# 2. Entorno virtual
+# 2. Virtual environment
 python3.12 -m venv venv
 source venv/bin/activate
 
-# 3. Dependencias
+# 3. Install pinned dependencies
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 
-# 4. Clave Fernet en .env (a partir de .env.example)
+# 4. Generate Fernet ENCRYPTION_KEY into .env from .env.example
 cp .env.example .env
 KEY=$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")
 python - "$KEY" <<'PY'
@@ -238,150 +237,148 @@ p = pathlib.Path(".env")
 p.write_text(p.read_text().replace("genera_tu_propia_llave_fernet_aqui", sys.argv[1]))
 PY
 
-# 5. Pruebas
+# 5. Run tests
 python -m unittest discover -s . -p "test_*.py" -v
 
-# 6. Servidor
+# 6. Start Flask server
 python app.py
 ```
 
-Abre **http://127.0.0.1:5000**, registra tu router (por ejemplo `192.168.76.10`, puerto `22`) y usa **Probar SSH** → **Respaldar** → **Comparar** → **Rollback**.
+Open **http://127.0.0.1:5000**, register your router (e.g., `192.168.76.10`, port `22`), and run **Test SSH** $\rightarrow$ **Backup** $\rightarrow$ **Compare** $\rightarrow$ **Rollback**.
 
-> ⚠️ **Conserva tu `ENCRYPTION_KEY`.** Si la cambias o la pierdes, las contraseñas ya almacenadas no podrán descifrarse (`InvalidToken`) y habrá que volver a registrar los dispositivos.
+> ⚠️ **Back up your `ENCRYPTION_KEY`.** If lost or rotated, previously encrypted passwords cannot be decrypted (`InvalidToken`) and devices must be re-registered.
 
-### Variables de Entorno AWS S3 (Respaldo Híbrido Opcional)
+### AWS S3 Environment Variables (Optional Hybrid Backup)
 
-| Variable | Valor por defecto | Descripción |
+| Variable | Default | Description |
 | :--- | :--- | :--- |
-| `ENCRYPTION_KEY` | *(obligatoria)* | Clave Fernet de 32 bytes en Base64 URL-safe usada para credenciales y doble cifrado S3. |
-| `ENABLE_S3_BACKUP` | `false` | Activa (`true`) o desactiva (`false`) la sincronización automática hacia AWS S3 al respaldar. |
-| `AWS_S3_BUCKET` | `tu-bucket-privado-network-backups` | Nombre del bucket privado S3 de destino (con versionado recomendado). |
-| `AWS_REGION` | `us-east-1` | Región AWS pasada a `boto3.client("s3", region_name=...)`. |
-| `DB_PATH` | `network_manager.db` | Ruta opcional de la base de datos SQLite (en Docker apunta a `/app/data/network_manager.db`). |
+| `ENCRYPTION_KEY` | *(required)* | 32-byte URL-safe Base64 Fernet key used for device credentials and S3 client-side encryption. |
+| `ENABLE_S3_BACKUP` | `false` | Enables (`true`) or disables (`false`) automatic AWS S3 replication on backup. |
+| `AWS_S3_BUCKET` | `tu-bucket-privado-network-backups` | Target private S3 bucket name (bucket versioning recommended). |
+| `AWS_REGION` | `us-east-1` | AWS region passed to `boto3.client("s3", region_name=...)`. |
+| `DB_PATH` | `network_manager.db` | Optional SQLite file path (defaults to `/app/data/network_manager.db` inside Docker). |
 
-> 🔐 **Autenticación IAM:** Nunca definas `aws_access_key_id` ni `aws_secret_access_key` en el código. Asigna un **IAM Role** con permiso `s3:PutObject` sobre `arn:aws:s3:::<tu-bucket>/backups/*` (o usa la cadena estándar de credenciales AWS del entorno).
+> 🔐 **IAM Authentication:** Never place `aws_access_key_id` or `aws_secret_access_key` in code. Attach an **IAM Role** granting `s3:PutObject` on `arn:aws:s3:::<your-bucket>/backups/*` (or rely on the standard AWS environment credential chain).
 
-### Ejecución con Docker (Contenedor Endurecido)
+### Running with Docker (Hardened Container)
 
-El contenedor corre bajo el usuario sin privilegios **`appuser`** con **Gunicorn** (`--preload -w 2 -b 0.0.0.0:5000`) y excluye `.env`, `*.db` y `venv/` mediante `.dockerignore`:
+The container runs as unprivileged **`appuser`** with **Gunicorn** (`--preload -w 2 -b 0.0.0.0:5000`) and excludes `.env`, `*.db`, and `venv/` via `.dockerignore`:
 
 ```bash
-# 1. Construir la imagen
+# 1. Build the image
 docker build -t network-config-manager:local .
 
-# 2. Verificar que el contenedor corre sin privilegios de root
+# 2. Verify non-root execution
 docker run --rm --entrypoint id network-config-manager:local
-# Esperado: uid=1000(appuser) gid=1000(appuser) ...
+# Expected: uid=1000(appuser) gid=1000(appuser) ...
 
-# 3. Ejecutar con volumen persistente para SQLite e inyección de variables en runtime
+# 3. Run with a persistent SQLite volume and runtime environment variables
 docker run -d --name net-conf-manag \
   -p 5000:5000 \
   -v netconf_data:/app/data \
-  -e ENCRYPTION_KEY="<tu-clave-fernet>" \
+  -e ENCRYPTION_KEY="<your-fernet-key>" \
   -e ENABLE_S3_BACKUP="false" \
   network-config-manager:local
 ```
 
-> Para habilitar AWS S3 desde el contenedor en ECS/EC2/EKS, asigna el IAM Role correspondiente a la tarea/instancia y añade `-e ENABLE_S3_BACKUP=true -e AWS_S3_BUCKET=<tu-bucket> -e AWS_REGION=us-east-1`.
+> To enable AWS S3 in ECS/EC2/EKS, attach the IAM Role to your task/instance and pass `-e ENABLE_S3_BACKUP=true -e AWS_S3_BUCKET=<your-bucket> -e AWS_REGION=us-east-1`.
 
 ---
 
-## 6. API REST
+## 6. REST API Documentation
 
-Todas las respuestas son JSON con la forma `{"status": "success" | "error", "message": ..., "data": ...}`. Los errores de red del equipo se traducen así: autenticación → `401`, timeout → `504`, transporte/otros → `502`.
+All responses return JSON formatted as `{"status": "success" | "error", "message": ..., "data": ...}`. Device network errors map cleanly to HTTP status codes: authentication $\rightarrow$ `401`, timeout $\rightarrow$ `504`, transport/other $\rightarrow$ `502`.
 
-| Método | Ruta | Descripción | Parámetros / payload | Códigos |
+| Method | Endpoint | Description | Parameters / Payload | Status Codes |
 | :--- | :--- | :--- | :--- | :--- |
-| `GET` | `/` | Sirve la interfaz web (`templates/index.html`). | — | `200` |
-| `GET` | `/api/devices` | Lista el inventario con el resumen de sus respaldos (`id`, `timestamp`, `size_bytes`). Sin credenciales. | — | `200` |
-| `POST` | `/api/devices` | Registra un dispositivo; cifra `password` y `secret` con Fernet. | JSON: `hostname` (o `name`), `ip_address`, `username`, `password` (obligatorios); `device_type` (def. `cisco_ios`), `port` (def. `22`, 1–65535), `secret` (opcional) | `201` creado · `400` JSON/campos/IP/puerto inválidos · `409` IP duplicada |
-| `DELETE` | `/api/devices/<id>` | Elimina el dispositivo y sus respaldos (cascada). | Ruta: `id` (entero) | `200` · `404` |
-| `POST` | `/api/devices/<id>/test` | Prueba SSH (y `enable` si hay *secret*) con `test_connection()`. | Ruta: `id` | `200` `connected: true` · `404` · `502` `connected: false` |
-| `POST` | `/api/devices/<id>/backup` | Extrae el `running-config` en vivo, guarda en SQLite y sincroniza copia cifrada en S3 si `ENABLE_S3_BACKUP=true` (degrada con `201` si S3 falla). | Ruta: `id` | `201` (`id`, `timestamp`, `size_bytes`, `config_text`, `s3_key`, `s3_version_id`, `cloud_sync`) · `404` · `401` · `504` · `502` |
-| `GET` | `/api/devices/<id>/backups` | Historial de respaldos del dispositivo (incluye `s3_key`, `s3_version_id`, más reciente primero). | Ruta: `id` | `200` · `404` |
-| `GET` | `/api/backups/<id>` | Contenido completo de un respaldo (`config_text`, `s3_key`, `s3_version_id`). | Ruta: `id` del respaldo | `200` · `404` |
-| `GET` | `/api/devices/<id>/diff` | *Diff* unificado entre dos respaldos del dispositivo (`has_changes`, `diff_lines`, `unified_diff`). | Query: `v1`, `v2` (IDs de respaldo, obligatorios y enteros) | `200` · `400` · `404` |
-| `POST` | `/api/devices/<id>/rollback/<backup_id>` | Aplica el respaldo al equipo con `apply_configuration()` y guarda en NVRAM. | Ruta: `id`, `backup_id` | `200` (`commands_applied`, `output`) · `404` · `401` · `504` · `502` |
+| `GET` | `/` | Serves the web UI (`templates/index.html`). | — | `200` |
+| `GET` | `/api/devices` | Lists device inventory with backup summaries (`id`, `timestamp`, `size_bytes`, `s3_key`, `s3_version_id`). No credentials returned. | — | `200` |
+| `POST` | `/api/devices` | Registers a device; encrypts `password` and `secret` with Fernet. | JSON: `hostname` (or `name`), `ip_address`, `username`, `password` (required); `device_type` (def. `cisco_ios`), `port` (def. `22`, 1–65535), `secret` (optional) | `201` created · `400` invalid input · `409` duplicate IP |
+| `DELETE` | `/api/devices/<id>` | Deletes the device and cascades to its backups. | Path: `id` (integer) | `200` · `404` |
+| `POST` | `/api/devices/<id>/test` | Tests SSH (and `enable` if secret is set) via `test_connection()`. | Path: `id` | `200` `connected: true` · `404` · `502` `connected: false` |
+| `POST` | `/api/devices/<id>/backup` | Fetches live `running-config`, saves to SQLite, and uploads encrypted copy to S3 if `ENABLE_S3_BACKUP=true` (returns `201` even if S3 fails). | Path: `id` | `201` (`id`, `timestamp`, `size_bytes`, `config_text`, `s3_key`, `s3_version_id`, `cloud_sync`) · `404` · `401` · `504` · `502` |
+| `GET` | `/api/devices/<id>/backups` | Lists backup history for the device (includes `s3_key`, `s3_version_id`, newest first). | Path: `id` | `200` · `404` |
+| `GET` | `/api/backups/<id>` | Returns full backup content (`config_text`, `s3_key`, `s3_version_id`). | Path: backup `id` | `200` · `404` |
+| `GET` | `/api/devices/<id>/diff` | Unified diff between two backups (`has_changes`, `diff_lines`, `unified_diff`). | Query: `v1`, `v2` (backup IDs, required integers) | `200` · `400` · `404` |
+| `POST` | `/api/devices/<id>/rollback/<backup_id>` | Applies the selected backup via `apply_configuration()` and saves to NVRAM. | Path: `id`, `backup_id` | `200` (`commands_applied`, `output`) · `404` · `401` · `504` · `502` |
 
-**Ejemplo — registrar un dispositivo**
+**Example — Register a Device**
 
 ```bash
 curl -X POST http://127.0.0.1:5000/api/devices \
   -H "Content-Type: application/json" \
-  -d '{"hostname":"R1","ip_address":"192.168.76.10","port":22,"device_type":"cisco_ios","username":"admin","password":"<contraseña>","secret":"<secret>"}'
+  -d '{"hostname":"R1","ip_address":"192.168.76.10","port":22,"device_type":"cisco_ios","username":"admin","password":"<password>","secret":"<secret>"}'
 ```
 
 ---
 
-## 7. Pruebas y validación en laboratorio
+## 7. Testing & Lab Validation
 
-### Suite automatizada — 46 pruebas `unittest` y linting `ruff`
+### Automated Suite — 46 `unittest` Cases & `ruff` Linting
 
 ```bash
 ruff check .
 python -m unittest discover -s . -p "test_*.py" -v
 ```
 
-| Archivo | Pruebas | Cobertura |
+| File | Tests | Coverage |
 | :--- | :---: | :--- |
-| [`test_db_crypto.py`](test_db_crypto.py) | 9 | Contraseña **no** presente en texto plano en la BD ni en los bytes del archivo `.db`; ida y vuelta Fernet; ocultamiento de credenciales en consultas; rechazo de tokens manipulados (HMAC); neutralización de inyección SQL; borrado en cascada; cifrado de `encrypted_secret`; *secret* opcional y migración idempotente de tablas heredadas (`devices` y columnas `s3_key`/`s3_version_id` en `backups`). |
-| [`test_net_automation.py`](test_net_automation.py) | 17 | Con *mocks* de Netmiko: `test_connection`, `fetch_running_config` (limpieza de cabeceras, parámetros de conexión, `enable()` condicional con `privilege 15`), `apply_configuration` (filtrado de comandos, `send_config_set` + `save_config`), errores de autenticación/timeout/socket/`SSHException`, sin fuga de credenciales y `calculate_diff` (marcadores `+`/`-`, configuraciones idénticas). |
-| [`test_cloud_storage.py`](test_cloud_storage.py) | 11 | Con *mocks* de `boto3.client`: omisión cuando `ENABLE_S3_BACKUP=false`, validación de `AWS_S3_BUCKET`, cifrado previo con Fernet sin texto plano, `ServerSideEncryption="AES256"`, captura de `VersionId`, sanitización de `hostname` en `s3_key`, degradación elegante ante `ClientError`/`NoCredentialsError`/red y verificación de cero credenciales estáticas AWS en el código fuente. |
-| [`test_api.py`](test_api.py) | 9 | Cliente de pruebas de Flask con BD temporal: las 10 rutas, códigos de error, ausencia de credenciales en las respuestas, persistencia de `cloud_sync`/`s3_key`/`s3_version_id` en `/backup` y degradación elegante (`HTTP 201`) cuando S3 falla o está deshabilitado. |
-| [`test_db.py`](test_db.py) | script | Verificación rápida (`python test_db.py`) con la BD real: inserta un router con *password* y *secret*, confirma el cifrado, descifra y borra el registro. |
+| [`test_db_crypto.py`](test_db_crypto.py) | 9 | Zero plaintext in SQLite or raw `.db` bytes; Fernet round-trip integrity; credential exclusion on public queries; HMAC tamper rejection; SQL injection neutralization; cascade delete; `encrypted_secret` encryption; optional secret; idempotent migrations (`devices` and `s3_key`/`s3_version_id` on `backups`). |
+| [`test_net_automation.py`](test_net_automation.py) | 17 | Mocked Netmiko: `test_connection`, `fetch_running_config` (header stripping, tuned timeouts, conditional `enable()` for `privilege 15`), `apply_configuration` (command filtering, `send_config_set` + `save_config`), auth/timeout/socket/`SSHException` handling without credential leaks, and `calculate_diff` (`+`/`-` markers, identical configs). |
+| [`test_cloud_storage.py`](test_cloud_storage.py) | 11 | Mocked `boto3.client`: no-op when `ENABLE_S3_BACKUP=false`, `AWS_S3_BUCKET` validation, client-side Fernet encryption without plaintext, `ServerSideEncryption="AES256"`, `VersionId` capture, `hostname` sanitization in `s3_key`, graceful degradation on `ClientError`/`NoCredentialsError`/network errors, and static AWS credential audit. |
+| [`test_api.py`](test_api.py) | 9 | Flask test client with isolated temp DB: all 10 routes, error codes, zero credential exposure, `cloud_sync`/`s3_key`/`s3_version_id` persistence on `/backup`, and graceful degradation (`HTTP 201`) on S3 failure or disabled flag. |
+| [`test_db.py`](test_db.py) | script | Quick verification (`python test_db.py`) against SQLite: inserts a test router with password & secret, confirms encryption, decrypts, and cleans up. |
 
-> `test_db.py` opera sobre `network_manager.db` (crea la base si no existe y elimina el registro de prueba al terminar).
+### Live Lab Scenario (Cisco IOSv)
 
-### Escenario real contra Cisco IOSv
+Validated end-to-end against **GNS3 + GNS3 VM (VMware Workstation) running Cisco IOSv 15.9(3)M6 at `192.168.76.10`** (SSHv2, port 22, `privilege 15` user + *enable secret*):
 
-Flujo funcional contra el laboratorio **GNS3 + GNS3 VM (VMware Workstation) con Cisco IOSv 15.9(3)M6 en `192.168.76.10`** (SSHv2, puerto 22, usuario `privilege 15` y *enable secret*):
+1. Register the router via the Web UI (credentials encrypted with Fernet in SQLite).
+2. **Test SSH** (`POST /api/devices/<id>/test`).
+3. **Backup** the live `running-config` (`POST /api/devices/<id>/backup`) and inspect it in the viewer.
+4. Modify the router configuration, capture a second backup, and **compare** both versions (`GET /api/devices/<id>/diff`).
+5. **Rollback** to the baseline version with modal confirmation (`POST /api/devices/<id>/rollback/<backup_id>`).
 
-1. Registrar el router desde la interfaz (credenciales cifradas con Fernet en SQLite).
-2. **Probar SSH** (`POST /api/devices/<id>/test`).
-3. **Respaldar** el `running-config` (`POST /api/devices/<id>/backup`) y consultarlo en el visor.
-4. Modificar la configuración del router, generar un segundo respaldo y **comparar** ambas versiones (`GET /api/devices/<id>/diff`).
-5. **Rollback** a la versión anterior con confirmación (`POST /api/devices/<id>/rollback/<backup_id>`).
-
-La compatibilidad SSH se verificó con una negociación real contra el equipo: Paramiko 3.5.1 acuerda host key `ssh-rsa`, cifrado `aes128-ctr` y MAC `hmac-sha2-256`, mientras que Paramiko 5.1.0 falla con `no acceptable kex algorithm`.
+SSH negotiation was verified live against the router: Paramiko 3.5.1 negotiates `ssh-rsa` host key, `aes128-ctr` cipher, and `hmac-sha2-256` MAC, whereas Paramiko 5.1.0 fails with `no acceptable kex algorithm`.
 
 ---
 
-## 8. Demostración Visual del Flujo End-to-End
+## 8. End-to-End Visual Walkthrough
 
-A continuación se documenta el recorrido completo de **Network Config Manager** ejecutado contra un router **Cisco IOSv 15.9(3)M6** en GNS3 (`192.168.76.10`) y su validación automatizada en **GitHub Actions**:
+Below is the complete operational workflow of **Network Config Manager** executed against **Cisco IOSv 15.9(3)M6** in GNS3 (`192.168.76.10`) alongside automated validation in **GitHub Actions**:
 
-### 1. Inventario de Dispositivos y Cifrado Fernet
-Alta del router Cisco IOSv (`192.168.76.10`) cifrando credenciales SSH y *enable secret* en reposo con Fernet (AES-128), y validación de conectividad SSHv2 en tiempo real desde el panel web.
+### 1. Device Inventory & Fernet Encryption
+Registering the Cisco IOSv router (`192.168.76.10`) with Fernet (AES-128) encryption at rest for SSH credentials and *enable secret*, followed by real-time SSHv2 connectivity validation from the dashboard.
 
-![Inventario de Dispositivos y Cifrado Fernet](docs/images/1dashboard_net.png)
+![Device Inventory and Fernet Encryption](docs/images/1dashboard_net.png)
 
-### 2. Captura de Respaldos Versionados
-Extracción automatizada del `running-config` vía Netmiko (`read_timeout=30`), limpieza de cabeceras volátiles de IOS y persistencia versionada en SQLite (con sincronización híbrida cifrada hacia AWS S3 cuando `ENABLE_S3_BACKUP=true`).
+### 2. Versioned Configuration Backups
+Automated extraction of the live `running-config` via Netmiko (`read_timeout=30`), stripping volatile IOS headers and persisting versioned snapshots in SQLite (with optional double-encrypted AWS S3 replication when `ENABLE_S3_BACKUP=true`).
 
-![Captura de Respaldos Versionados](docs/images/2backup_net.png)
+![Versioned Configuration Backups](docs/images/2backup_net.png)
 
-### 3. Modificación en Vivo en Cisco IOSv (GNS3)
-Cambio aplicado directamente en la CLI del router (`Loopback99`) mediante terminal SSH/PuTTY para simular una modificación fuera de banda y auditar la deriva de configuración (*configuration drift*).
+### 3. Live Configuration Change on Cisco IOSv (GNS3)
+Out-of-band modification applied directly on the router CLI (`Loopback99`) via SSH/PuTTY terminal to simulate and audit *configuration drift*.
 
-![Modificación en Vivo en Cisco IOSv (GNS3)](docs/images/3putty_terminal.png)
+![Live Configuration Change on Cisco IOSv](docs/images/3putty_terminal.png)
 
-### 4. Auditoría Visual Diff y Rollback
-Comparación línea por línea entre versiones calculada en el backend con `difflib.unified_diff` (resaltando adiciones `+` en verde y supresiones `-` en rojo) y flujo de restauración automatizada (*rollback*) al estado base con confirmación modal.
+### 4. Visual Diff Audit & Automated Rollback
+Line-by-line comparison computed server-side with `difflib.unified_diff` (highlighting `+` additions in green and `-` deletions in red) paired with one-click confirmed rollback to restore the baseline state.
 
-![Auditoría Visual Diff y Rollback](docs/images/4version_compare.png)
+![Visual Diff Audit and Automated Rollback](docs/images/4version_compare.png)
 
-### 5. Pipeline CI/CD en GitHub Actions
-Ejecución automática en tres etapas encadenadas ante cada `push` o `pull_request` a `main`: análisis estático con `ruff`, suite completa de **46 pruebas unitarias (`unittest`)** con `ENCRYPTION_KEY` efímera y construcción verificada de la imagen Docker endurecida (`appuser`).
+### 5. GitHub Actions CI/CD Pipeline
+Automated three-stage pipeline triggered on every `push` or `pull_request` to `main`: static analysis with `ruff`, full **46-test `unittest` suite** with an ephemeral `ENCRYPTION_KEY`, and verified build of the hardened non-root Docker image (`appuser`).
 
-![Pipeline CI/CD en GitHub Actions](docs/images/5github_actions.png)
+![GitHub Actions CI/CD Pipeline](docs/images/5github_actions.png)
 
 ---
 
-## 9. Consideraciones y limitaciones conocidas
+## 9. Known Considerations & Limitations
 
-- **Alcance de laboratorio.** La API **no tiene autenticación** y `app.py` escucha en `0.0.0.0:5000` (servidor de desarrollo de Flask, `debug=False`). Úsalo en una red de laboratorio de confianza, o cambia el `host` a `127.0.0.1` o restríngelo con un firewall antes de exponerlo.
-- **El rollback es aditivo.** `apply_configuration()` envía las líneas del respaldo (sin comentarios `!`, cabeceras ni `end`) con `send_config_set()`; **no elimina** las líneas añadidas después del respaldo. Revisa el *diff* antes de restaurar.
-- **Los respaldos se guardan tal cual.** `raw_config` no se cifra; un `running-config` puede contener *hashes* de contraseñas, comunidades SNMP u otros datos sensibles. Protege el archivo `network_manager.db` (ya excluido de Git).
-- **Sin verificación de *host key* SSH.** Netmiko usa por defecto una política permisiva (`ssh_strict=False`).
-- **Dependencia fijada.** Paramiko debe permanecer en **3.5.1** mientras se gestionen equipos IOS/IOSv que solo ofrecen algoritmos SHA-1.
-- **Gobernanza.** Las reglas del proyecto están en [`RULES.md`](RULES.md); la topología, el modelo de datos y el flujo, en [`ARCHITECTURE.md`](ARCHITECTURE.md).
+- **Lab Scope:** The API has **no built-in authentication** and `app.py` binds to `0.0.0.0:5000`. Run it inside a trusted lab/management network or place it behind an authenticated reverse proxy / firewall before exposing it.
+- **Additive Rollback:** `apply_configuration()` replays the backup lines (excluding `!` comments, headers, and `end`) via `send_config_set()`; it **does not automatically remove** extra lines added after the backup. Always review the diff before rolling back.
+- **Local Backup Storage:** `raw_config` in SQLite is stored unencrypted (so diffs remain fast) and may contain password hashes or SNMP strings—protect `network_manager.db` accordingly (excluded from Git and Docker images).
+- **Permissive SSH Host Key Policy:** Netmiko defaults to `ssh_strict=False`.
+- **Pinned Paramiko:** Keep `paramiko==3.5.1` while managing legacy IOS/IOSv images that rely on SHA-1 SSH algorithms.
+- **Governance:** Project rules are defined in [`RULES.md`](RULES.md); topology, data model, and execution flow are documented in [`ARCHITECTURE.md`](ARCHITECTURE.md).
